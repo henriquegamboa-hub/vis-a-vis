@@ -35,6 +35,12 @@ export default defineConfig(({ command, mode }) => {
       strictPort: true,
     },
     resolve: { tsconfigPaths: true },
+    optimizeDeps: {
+      exclude: ["@huggingface/transformers", "onnxruntime-web"],
+    },
+    ssr: {
+      external: ["@huggingface/transformers", "onnxruntime-node", "onnxruntime-web", "sharp"],
+    },
     plugins: [
       tailwindcss(),
       tanstackStart(

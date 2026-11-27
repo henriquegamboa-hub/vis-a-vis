@@ -7,6 +7,8 @@ import {
   dotsForChar,
   resolveChord,
 } from "@/lib/braille";
+import { useKeyboardVoice } from "@/lib/use-keyboard-voice";
+import { speakFrench, speechOutputAvailable, stopSpeaking } from "@/lib/voice-browser";
 
 type Side = "left" | "right";
 type Theme = "dark" | "light";
@@ -75,6 +77,12 @@ const PRESS_TEMPOS: { ms: number; label: string }[] = [
   { ms: 100, label: "1/10 s" },
   { ms: 500, label: "1/2 s" },
   { ms: 1000, label: "1 s" },
+];
+
+const KEYBOARD_ENTRIES: { id: "keyboard" | "local" | "external"; label: string }[] = [
+  { id: "keyboard", label: "Clavier" },
+  { id: "local", label: "Vocale, sans sortie" },
+  { id: "external", label: "Vocale, externe" },
 ];
 
 /** Mode relâchement : écart fixe entre deux touches d’un même geste. Ni réglable, ni affiché. */
@@ -151,6 +159,10 @@ export function VisAVis() {
   const [tempo, setTempo] = useState(0);
   const [toggleDots, setToggleDots] = useState<number[]>([]);
   const [frameWidth, setFrameWidth] = useState(FRAME_DEFAULT);
+  const [hearBraille, setHearBraille] = useState(false);
+  const [hearKeyboard, setHearKeyboard] = useState(false);
+  const [insecureContext, setInsecureContext] = useState(false);
+  const [speechNote, setSpeechNote] = useState("");
 
   const keyboardRef = useRef<HTMLTextAreaElement>(null);
   const brailleRef = useRef<HTMLDivElement>(null);
@@ -176,6 +188,20 @@ export function VisAVis() {
   const pressCommittedRef = useRef(false);
   const idRef = useRef(1);
   const unknownTimer = useRef<number | null>(null);
+  const hearBrailleRef = useRef(false);
+  const hearKeyboardRef = useRef(false);
+
+  useEffect(() => {
+    setInsecureContext(window.isSecureContext === false);
+  }, []);
+
+  const voice = useKeyboardVoice({
+    read: () => draftRef.current,
+    write: (value) => {
+      draftRef.current = value;
+      setDraft(value);
+    },
+  });
 
   function commit(next: Cell[], nextCursor: number) {
     cellsRef.current = next;
@@ -227,6 +253,45 @@ export function VisAVis() {
     idRef.current += 1;
     setMessages((prev) => [...prev, { id, side, text, cells: braille, at: new Date() }]);
     setLive(side === "left" ? `Message clavier envoyé. ${text}` : `Message braille envoyé. ${text}`);
+    const aloud = (side === "right" && hearBrailleRef.current) || (side === "left" && hearKeyboardRef.current);
+    if (!aloud) return;
+    try {
+      speakFrench(text);
+    } catch (error) {
+      setSpeechNote(error instanceof Error ? error.message : "Lecture vocale indisponible.");
+    }
+  }
+
+  function toggleSpeech(which: Side) {
+    if (!speechOutputAvailable()) {
+      setSpeechNote("Lecture vocale indisponible dans ce navigateur.");
+      return;
+    }
+    const enabled = which === "left" ? !hearBrailleRef.current : !hearKeyboardRef.current;
+    if (which === "left") {
+      hearBrailleRef.current = enabled;
+      setHearBraille(enabled);
+    } else {
+      hearKeyboardRef.current = enabled;
+      setHearKeyboard(enabled);
+    }
+    setSpeechNote("");
+    if (!enabled) stopSpeaking();
+  }
+
+  function replayLast(source: Side) {
+    const text = [...messages].reverse().find((message) => message.side === source)?.text;
+    if (!text) return;
+    if (!speechOutputAvailable()) {
+      setSpeechNote("Lecture vocale indisponible dans ce navigateur.");
+      return;
+    }
+    try {
+      speakFrench(text, true);
+      setSpeechNote("");
+    } catch (error) {
+      setSpeechNote(error instanceof Error ? error.message : "Lecture vocale indisponible.");
+    }
   }
 
   function sendKeyboard() {
@@ -842,6 +907,64 @@ export function VisAVis() {
         </button>
       </header>
 
+      <div data-testid="speech-bar" className="grid shrink-0 grid-cols-2 gap-3 border-b border-border px-4 py-3">
+        <div className="flex min-w-0 gap-2">
+          <button
+            type="button"
+            data-testid="keyboard-speech-out"
+            aria-pressed={hearBraille}
+            aria-label="Sortie vocale du braille"
+            onClick={() => toggleSpeech("left")}
+            className={
+              "h-11 min-w-0 flex-1 rounded-lg px-2 text-sm font-medium " +
+              (hearBraille ? "bg-accent text-accent-fg" : "border border-border")
+            }
+          >
+            Sortie vocale
+          </button>
+          <button
+            type="button"
+            data-testid="keyboard-replay"
+            aria-label="Rejouer le dernier message braille"
+            disabled={!messages.some((message) => message.side === "right")}
+            onClick={() => replayLast("right")}
+            className="h-11 min-w-0 flex-1 rounded-lg border border-border px-2 text-sm font-medium"
+          >
+            Rejouer
+          </button>
+        </div>
+        <div className="flex min-w-0 gap-2">
+          <button
+            type="button"
+            data-testid="braille-speech-out"
+            aria-pressed={hearKeyboard}
+            aria-label="Sortie vocale du clavier"
+            onClick={() => toggleSpeech("right")}
+            className={
+              "h-11 min-w-0 flex-1 rounded-lg px-2 text-sm font-medium " +
+              (hearKeyboard ? "bg-accent text-accent-fg" : "border border-border")
+            }
+          >
+            Sortie vocale
+          </button>
+          <button
+            type="button"
+            data-testid="braille-replay"
+            aria-label="Rejouer le dernier message clavier"
+            disabled={!messages.some((message) => message.side === "left")}
+            onClick={() => replayLast("left")}
+            className="h-11 min-w-0 flex-1 rounded-lg border border-border px-2 text-sm font-medium"
+          >
+            Rejouer
+          </button>
+        </div>
+        {speechNote ? (
+          <p className="col-span-2 text-xs leading-snug text-muted" role="status">
+            {speechNote}
+          </p>
+        ) : null}
+      </div>
+
       <div ref={logRef} data-testid="log" className="flex min-h-40 flex-1 flex-col overflow-y-auto">
         <div className="mt-auto flex flex-col gap-4 px-4 py-6">
           {messages.length === 0 ? (
@@ -936,13 +1059,61 @@ export function VisAVis() {
                 <span className="text-xs text-muted">à gauche</span>
               )}
             </div>
+            <label className="flex flex-col gap-1">
+              <span className="text-xs font-medium tracking-wide text-muted uppercase">Entrée</span>
+              <select
+                data-testid="keyboard-entry"
+                value={voice.entry}
+                onChange={(event) => voice.changeEntry(event.target.value)}
+                className="h-11 w-full rounded-lg border border-border bg-bg px-2 text-base text-fg"
+              >
+                {KEYBOARD_ENTRIES.map((item) => (
+                  <option key={item.id} value={item.id}>
+                    {item.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+            {voice.entry !== "keyboard" && insecureContext ? (
+              <p className="text-xs leading-snug text-muted">
+                Le micro est bloqué sur cette adresse. Ouvrez http://localhost:8080/.
+              </p>
+            ) : null}
+            {voice.entry === "local" ? (
+              <p className="text-xs leading-snug text-muted">
+                Reconnaissance en français, dans l’application. Le modèle se télécharge au premier usage, puis l’audio reste ici. Arrêter transcrit ce qui a été dit.
+              </p>
+            ) : null}
+            {voice.entry === "external" ? (
+              <p className="text-xs leading-snug text-muted">
+                Reconnaissance en français par le navigateur, à partir du micro du système. Le texte s’écrit ici pendant que vous parlez.
+              </p>
+            ) : null}
+            {voice.entry !== "keyboard" ? (
+              <button
+                type="button"
+                data-testid="keyboard-listen"
+                onClick={() => (voice.phase === "idle" ? voice.listen() : voice.stop())}
+                className={
+                  "h-11 rounded-lg text-sm font-medium " +
+                  (voice.phase === "idle" ? "border border-border" : "bg-accent text-accent-fg")
+                }
+              >
+                {voice.phase === "idle" ? "Écouter" : "Arrêter"}
+              </button>
+            ) : null}
+            {voice.status ? (
+              <p data-testid="keyboard-voice-status" className="text-xs leading-snug text-muted" aria-live="polite">
+                {voice.status}
+              </p>
+            ) : null}
             <textarea
               ref={keyboardRef}
               data-testid="keyboard-input"
               value={draft}
               rows={2}
               aria-label="Saisie clavier"
-              placeholder="Écrire au clavier…"
+              placeholder={voice.entry === "keyboard" ? "Écrire au clavier…" : "Le texte reconnu apparaît ici…"}
               spellCheck={false}
               autoCapitalize="off"
               autoCorrect="off"
